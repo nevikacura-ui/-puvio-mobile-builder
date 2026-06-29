@@ -1,0 +1,75 @@
+name: Mobile Build Dispatcher
+
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        description: 'Build job ID'
+        required: true
+        type: string
+      source_url:
+        description: 'Source web app URL'
+        required: true
+        type: string
+      package_id:
+        description: 'Package ID'
+        required: true
+        type: string
+      display_name:
+        description: 'App display name'
+        required: true
+        type: string
+      icon_url:
+        description: 'App icon URL'
+        required: false
+        type: string
+      splash_color:
+        description: 'Splash screen color'
+        required: false
+        type: string
+      orientation:
+        description: 'Screen orientation'
+        required: false
+        type: string
+      formats:
+        description: 'Output formats (apk,aab,ipa)'
+        required: true
+        type: string
+      version_name:
+        description: 'Version name'
+        required: true
+        type: string
+      version_code:
+        description: 'Version code'
+        required: true
+        type: string
+      callback_url:
+        description: 'Callback URL to report status'
+        required: true
+        type: string
+
+jobs:
+  acknowledge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report dispatch received
+        run: |
+          echo "Received build dispatch:"
+          echo "Job ID: ${{ github.event.inputs.job_id }}"
+          echo "Source: ${{ github.event.inputs.source_url }}"
+          echo "Package: ${{ github.event.inputs.package_id }}"
+          echo "Display Name: ${{ github.event.inputs.display_name }}"
+          echo "Formats: ${{ github.event.inputs.formats }}"
+          echo "Version: ${{ github.event.inputs.version_name }} (${{ github.event.inputs.version_code }})"
+          echo "Callback: ${{ github.event.inputs.callback_url }}"
+
+      - name: Acknowledge back to Lovable
+        env:
+          CALLBACK_URL: ${{ github.event.inputs.callback_url }}
+          JOB_ID: ${{ github.event.inputs.job_id }}
+        run: |
+          if [ -n "$CALLBACK_URL" ]; then
+            curl -s -X POST "$CALLBACK_URL" \
+              -H "Content-Type: application/json" \
+              -d "{\"job_id\":\"$JOB_ID\",\"status\":\"acknowledged\",\"message\":\"Build dispatch received by $GITHUB_REPOSITORY\"}" || true
+          fi
