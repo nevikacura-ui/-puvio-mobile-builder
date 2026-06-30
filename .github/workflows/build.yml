@@ -133,32 +133,6 @@ jobs:
             convert /tmp/icon.src -resize "${SZ[$d]}x${SZ[$d]}" "$RES/mipmap-$d/ic_launcher_foreground.png"
           done
 
-      - name: Fetch verified signing secrets
-        run: |
-          set -euo pipefail
-          SIGNING_URL="${CALLBACK_URL%/build-callback}/builder-signing"
-          ALT_SIGNING_URL="https://id-preview--a1bc20a6-4187-4566-9a73-6dfd75ce907d.lovable.app/api/public/builder-signing"
-          if ! curl -fsSL -H "Authorization: Bearer ${CALLBACK_SECRET}" "$SIGNING_URL" -o "$RUNNER_TEMP/signing.json"; then
-            curl -fsSL -H "Authorization: Bearer ${CALLBACK_SECRET}" "$ALT_SIGNING_URL" -o "$RUNNER_TEMP/signing.json"
-          fi
-          python3 - <<'PY'
-          import json, os, uuid
-          path = os.path.join(os.environ["RUNNER_TEMP"], "signing.json")
-          data = json.load(open(path))
-          if not data.get("ok"):
-              raise SystemExit(data.get("error") or "signing secret fetch failed")
-          mapping = {
-              "KEYSTORE_B64": data["keystoreBase64"],
-              "KEYSTORE_PASS": data["keystorePassword"],
-              "KEY_ALIAS": data["keyAlias"],
-              "KEY_PASS": data["keyPassword"],
-          }
-          with open(os.environ["GITHUB_ENV"], "a") as env:
-              for key, value in mapping.items():
-                  marker = f"PUVIO_{key}_{uuid.uuid4().hex}"
-                  env.write(f"{key}<<{marker}\n{value}\n{marker}\n")
-          PY
-
       - name: Decode keystore
         id: ks
         run: |
