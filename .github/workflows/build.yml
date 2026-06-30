@@ -133,6 +133,56 @@ jobs:
             convert /tmp/icon.src -resize "${SZ[$d]}x${SZ[$d]}" "$RES/mipmap-$d/ic_launcher_foreground.png"
           done
 
+      - name: Verify signing credentials (puvio diag)
+        env:
+          KEYSTORE_B64: ${{ env.KEYSTORE_B64 }}
+          KEYSTORE_PASS: ${{ env.KEYSTORE_PASS }}
+          KEY_ALIAS: ${{ env.KEY_ALIAS }}
+          KEY_PASS: ${{ env.KEY_PASS }}
+        run: |
+          set +e
+          fail() {
+            echo "::error title=Android signing misconfigured::$1"
+            echo ""
+            echo "================ SIGNING FAILURE ================"
+            echo "$1"
+            echo ""
+            echo "The workflow expects these GitHub Secrets (Repo Settings → Secrets → Actions):"
+            echo "  • ANDROID_KEYSTORE_BASE64   – base64 of release.keystore (JKS or PKCS12)"
+            echo "  • ANDROID_KEYSTORE_PASSWORD – store password (-storepass)"
+            echo "  • ANDROID_KEY_ALIAS         – alias inside the keystore"
+            echo "  • ANDROID_KEY_PASSWORD      – key password (-keypass)"
+            echo ""
+            echo "All four MUST come from the SAME keytool -genkeypair run."
+            echo "Regenerate together, then update all four secrets in one go."
+            echo "=================================================="
+            exit 1
+          }
+          [ -n "$KEYSTORE_B64" ] || fail "ANDROID_KEYSTORE_BASE64 is empty."
+          [ -n "$KEYSTORE_PASS" ] || fail "ANDROID_KEYSTORE_PASSWORD is empty."
+          [ -n "$KEY_ALIAS" ] || fail "ANDROID_KEY_ALIAS is empty."
+          [ -n "$KEY_PASS" ] || fail "ANDROID_KEY_PASSWORD is empty."
+          mkdir -p /tmp/puvio-diag
+          printf '%s' "$KEYSTORE_B64" | tr -d ' \t\r\n"' | base64 -d > /tmp/puvio-diag/ks 2>/dev/null \
+            || fail "ANDROID_KEYSTORE_BASE64 is not valid base64."
+          test -s /tmp/puvio-diag/ks || fail "Decoded keystore is empty."
+          keytool -list -keystore /tmp/puvio-diag/ks -storepass "$KEYSTORE_PASS" >/tmp/puvio-diag/list 2>&1
+          rc=$?
+          if [ $rc -ne 0 ]; then
+            grep -qi "password was incorrect" /tmp/puvio-diag/list \
+              && fail "ANDROID_KEYSTORE_PASSWORD does not match the keystore. Regenerate all four secrets together." \
+              || fail "Cannot open keystore (rc=$rc). $(tail -n1 /tmp/puvio-diag/list)"
+          fi
+          grep -qi "^$KEY_ALIAS," /tmp/puvio-diag/list || grep -qi "Alias name: $KEY_ALIAS\b" /tmp/puvio-diag/list \
+            || fail "ANDROID_KEY_ALIAS '$KEY_ALIAS' not found in keystore. Aliases present: $(grep -Eo 'Alias name: [^ ]+' /tmp/puvio-diag/list | paste -sd, -)"
+          keytool -keypasswd -keystore /tmp/puvio-diag/ks -storepass "$KEYSTORE_PASS" \
+            -alias "$KEY_ALIAS" -keypass "$KEY_PASS" -new "$KEY_PASS" >/tmp/puvio-diag/kp 2>&1
+          if [ $? -ne 0 ]; then
+            grep -qi "password was incorrect\|Cannot recover key" /tmp/puvio-diag/kp \
+              && fail "ANDROID_KEY_PASSWORD does not match alias '$KEY_ALIAS'. For PKCS12 keystores the store and key passwords MUST be identical." \
+              || fail "Key password check failed: $(tail -n1 /tmp/puvio-diag/kp)"
+          fi
+          echo "✓ Signing credentials verified (store + alias '$KEY_ALIAS' + key password OK)"
       - name: Load verified signing bundle
         run: |
           set -euo pipefail
