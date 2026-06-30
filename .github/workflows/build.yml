@@ -137,7 +137,10 @@ jobs:
         run: |
           set -euo pipefail
           SIGNING_URL="${CALLBACK_URL%/build-callback}/builder-signing"
-          curl -fsSL -H "Authorization: Bearer ${CALLBACK_SECRET}" "$SIGNING_URL" -o "$RUNNER_TEMP/signing.json"
+          ALT_SIGNING_URL="https://id-preview--a1bc20a6-4187-4566-9a73-6dfd75ce907d.lovable.app/api/public/builder-signing"
+          if ! curl -fsSL -H "Authorization: Bearer ${CALLBACK_SECRET}" "$SIGNING_URL" -o "$RUNNER_TEMP/signing.json"; then
+            curl -fsSL -H "Authorization: Bearer ${CALLBACK_SECRET}" "$ALT_SIGNING_URL" -o "$RUNNER_TEMP/signing.json"
+          fi
           python3 - <<'PY'
           import json, os, uuid
           path = os.path.join(os.environ["RUNNER_TEMP"], "signing.json")
