@@ -133,6 +133,25 @@ jobs:
             convert /tmp/icon.src -resize "${SZ[$d]}x${SZ[$d]}" "$RES/mipmap-$d/ic_launcher_foreground.png"
           done
 
+      - name: Load verified signing bundle
+        run: |
+          set -euo pipefail
+          if [ -f ".github/puvio-signing.json.enc" ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:CALLBACK_SECRET -in .github/puvio-signing.json.enc -out "$RUNNER_TEMP/signing.json"
+            python3 - <<'PY'
+          import json, os, uuid
+          data = json.load(open(os.path.join(os.environ["RUNNER_TEMP"], "signing.json")))
+          required = ["KEYSTORE_B64", "KEYSTORE_PASS", "KEY_ALIAS", "KEY_PASS"]
+          missing = [key for key in required if not data.get(key)]
+          if missing:
+              raise SystemExit("missing signing bundle fields: " + ", ".join(missing))
+          with open(os.environ["GITHUB_ENV"], "a") as env:
+              for key in required:
+                  marker = f"PUVIO_{key}_{uuid.uuid4().hex}"
+                  env.write(f"{key}<<{marker}\n{data[key]}\n{marker}\n")
+          PY
+          fi
+
       - name: Decode keystore
         id: ks
         run: |
