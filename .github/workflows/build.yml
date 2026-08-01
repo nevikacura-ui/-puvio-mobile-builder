@@ -175,12 +175,17 @@ jobs:
           fi
           grep -qi "^$KEY_ALIAS," /tmp/puvio-diag/list || grep -qi "Alias name: $KEY_ALIAS\b" /tmp/puvio-diag/list \
             || fail "ANDROID_KEY_ALIAS '$KEY_ALIAS' not found in keystore. Aliases present: $(grep -Eo 'Alias name: [^ ]+' /tmp/puvio-diag/list | paste -sd, -)"
-          keytool -keypasswd -keystore /tmp/puvio-diag/ks -storepass "$KEYSTORE_PASS" \
-            -alias "$KEY_ALIAS" -keypass "$KEY_PASS" -new "$KEY_PASS" >/tmp/puvio-diag/kp 2>&1
-          if [ $? -ne 0 ]; then
-            grep -qi "password was incorrect\|Cannot recover key" /tmp/puvio-diag/kp \
-              && fail "ANDROID_KEY_PASSWORD does not match alias '$KEY_ALIAS'. For PKCS12 keystores the store and key passwords MUST be identical." \
-              || fail "Key password check failed: $(tail -n1 /tmp/puvio-diag/kp)"
+          if grep -qi "Keystore type: PKCS12" /tmp/puvio-diag/list; then
+            [ "$KEY_PASS" = "$KEYSTORE_PASS" ] \
+              || fail "ANDROID_KEY_PASSWORD must equal ANDROID_KEYSTORE_PASSWORD for a PKCS12 keystore."
+          else
+            keytool -keypasswd -keystore /tmp/puvio-diag/ks -storepass "$KEYSTORE_PASS" \
+              -alias "$KEY_ALIAS" -keypass "$KEY_PASS" -new "$KEY_PASS" >/tmp/puvio-diag/kp 2>&1
+            if [ $? -ne 0 ]; then
+              grep -qi "password was incorrect\|Cannot recover key" /tmp/puvio-diag/kp \
+                && fail "ANDROID_KEY_PASSWORD does not match alias '$KEY_ALIAS'." \
+                || fail "Key password check failed: $(tail -n1 /tmp/puvio-diag/kp)"
+            fi
           fi
           echo "✓ Signing credentials verified (store + alias '$KEY_ALIAS' + key password OK)"
       - name: Load verified signing bundle
