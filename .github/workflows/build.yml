@@ -81,13 +81,16 @@ jobs:
           <title>${DISPLAY_NAME}</title>
           HTML
 
+          NAV_HOST=$(printf '%s' "$SOURCE_URL" | sed -E 's#^[a-zA-Z]+://##; s#/.*##; s#:.*##' | tr 'A-Z' 'a-z')
+          NAV_BARE=${NAV_HOST#www.}
+          ALLOW_NAV="[\"$NAV_HOST\",\"$NAV_BARE\",\"www.$NAV_BARE\",\"*.$NAV_BARE\"]"
           SAFE_NAME=$(printf '%s' "$DISPLAY_NAME" | sed 's/"/\\"/g')
           cat > capacitor.config.json <<JSON
           {
             "appId": "${PACKAGE_ID}",
             "appName": "${SAFE_NAME}",
             "webDir": "www",
-            "server": { "url": "${SOURCE_URL}", "androidScheme": "https", "cleartext": false },
+            "server": { "url": "${SOURCE_URL}", "androidScheme": "https", "cleartext": false, "allowNavigation": ${ALLOW_NAV} },
             "android": { "allowMixedContent": false }
           }
           JSON
