@@ -98,6 +98,26 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Inject Puvio native installer
+        if: ${{ inputs.package_id == 'app.puvio.store' }}
+        working-directory: app
+        run: |
+          set -e
+          PKG_DIR="android/app/src/main/java/$(echo "app.puvio.store" | tr '.' '/')"
+          mkdir -p "$PKG_DIR/installer"
+          curl -fsSL "https://www.puvio.ai/api/public/android/installer-plugin" -o "$PKG_DIR/installer/PuvioInstallerPlugin.kt"
+
+          # Register the plugin in MainActivity (Kotlin or Java shell).
+          if [ -f "$PKG_DIR/MainActivity.kt" ]; then
+            echo "cGFja2FnZSBhcHAucHV2aW8uc3RvcmUKCmltcG9ydCBhbmRyb2lkLm9zLkJ1bmRsZQppbXBvcnQgY29tLmdldGNhcGFjaXRvci5CcmlkZ2VBY3Rpdml0eQppbXBvcnQgYXBwLnB1dmlvLnN0b3JlLmluc3RhbGxlci5QdXZpb0luc3RhbGxlclBsdWdpbgoKY2xhc3MgTWFpbkFjdGl2aXR5IDogQnJpZGdlQWN0aXZpdHkoKSB7CiAgICBvdmVycmlkZSBmdW4gb25DcmVhdGUoc2F2ZWRJbnN0YW5jZVN0YXRlOiBCdW5kbGU/KSB7CiAgICAgICAgcmVnaXN0ZXJQbHVnaW4oUHV2aW9JbnN0YWxsZXJQbHVnaW46OmNsYXNzLmphdmEpCiAgICAgICAgc3VwZXIub25DcmVhdGUoc2F2ZWRJbnN0YW5jZVN0YXRlKQogICAgfQp9Cg==" | base64 -d > "$PKG_DIR/MainActivity.kt"
+          else
+            echo "cGFja2FnZSBhcHAucHV2aW8uc3RvcmU7CgppbXBvcnQgYW5kcm9pZC5vcy5CdW5kbGU7CmltcG9ydCBjb20uZ2V0Y2FwYWNpdG9yLkJyaWRnZUFjdGl2aXR5OwppbXBvcnQgYXBwLnB1dmlvLnN0b3JlLmluc3RhbGxlci5QdXZpb0luc3RhbGxlclBsdWdpbjsKCnB1YmxpYyBjbGFzcyBNYWluQWN0aXZpdHkgZXh0ZW5kcyBCcmlkZ2VBY3Rpdml0eSB7CiAgICBAT3ZlcnJpZGUKICAgIHB1YmxpYyB2b2lkIG9uQ3JlYXRlKEJ1bmRsZSBzYXZlZEluc3RhbmNlU3RhdGUpIHsKICAgICAgICByZWdpc3RlclBsdWdpbihQdXZpb0luc3RhbGxlclBsdWdpbi5jbGFzcyk7CiAgICAgICAgc3VwZXIub25DcmVhdGUoc2F2ZWRJbnN0YW5jZVN0YXRlKTsKICAgIH0KfQo=" | base64 -d > "$PKG_DIR/MainActivity.java"
+          fi
+
+          # PackageInstaller + notification permissions.
+          echo "aW1wb3J0IHN5cwpwYXRoID0gc3lzLmFyZ3ZbMV0KeG1sID0gb3BlbihwYXRoLCBlbmNvZGluZz0idXRmLTgiKS5yZWFkKCkKcGVybXMgPSBbCiAgICAiYW5kcm9pZC5wZXJtaXNzaW9uLklOVEVSTkVUIiwKICAgICJhbmRyb2lkLnBlcm1pc3Npb24uUkVRVUVTVF9JTlNUQUxMX1BBQ0tBR0VTIiwKICAgICJhbmRyb2lkLnBlcm1pc3Npb24uUVVFUllfQUxMX1BBQ0tBR0VTIiwKICAgICJhbmRyb2lkLnBlcm1pc3Npb24uUE9TVF9OT1RJRklDQVRJT05TIiwKXQppZiAieG1sbnM6dG9vbHMiIG5vdCBpbiB4bWw6CiAgICB4bWwgPSB4bWwucmVwbGFjZSgiPG1hbmlmZXN0ICIsICc8bWFuaWZlc3QgeG1sbnM6dG9vbHM9Imh0dHA6Ly9zY2hlbWFzLmFuZHJvaWQuY29tL3Rvb2xzIiAnLCAxKQpsaW5lcyA9IFtdCmZvciBwIGluIHBlcm1zOgogICAgaWYgcCBpbiB4bWw6CiAgICAgICAgY29udGludWUKICAgIGV4dHJhID0gJyB0b29sczppZ25vcmU9IlF1ZXJ5QWxsUGFja2FnZXNQZXJtaXNzaW9uIicgaWYgcC5lbmRzd2l0aCgiUVVFUllfQUxMX1BBQ0tBR0VTIikgZWxzZSAiIgogICAgbGluZXMuYXBwZW5kKCcgICAgPHVzZXMtcGVybWlzc2lvbiBhbmRyb2lkOm5hbWU9IiVzIiVzIC8+JyAlIChwLCBleHRyYSkpCmlmIGxpbmVzOgogICAgeG1sID0geG1sLnJlcGxhY2UoIjwvbWFuaWZlc3Q+IiwgIlxuIi5qb2luKGxpbmVzKSArICJcbjwvbWFuaWZlc3Q+IiwgMSkKb3BlbihwYXRoLCAidyIsIGVuY29kaW5nPSJ1dGYtOCIpLndyaXRlKHhtbCkKcHJpbnQoIm1hbmlmZXN0IHBlcm1pc3Npb25zIGVuc3VyZWQiKQo=" | base64 -d > /tmp/puvio_manifest.py
+          python3 /tmp/puvio_manifest.py "android/app/src/main/AndroidManifest.xml"
+
       - name: Apply version + orientation + display name
         working-directory: app/android
         run: |
