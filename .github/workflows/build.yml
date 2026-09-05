@@ -98,6 +98,77 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Inject Puvio native installer
+        if: ${{ inputs.package_id == 'app.puvio.store' }}
+        working-directory: app
+        run: |
+          set -e
+          PKG_DIR="android/app/src/main/java/$(echo "app.puvio.store" | tr '.' '/')"
+          mkdir -p "$PKG_DIR/installer"
+          curl -fsSL "https://www.puvio.ai/api/public/android/installer-plugin" -o "$PKG_DIR/installer/PuvioInstallerPlugin.kt"
+
+          # Register the plugin in MainActivity (Kotlin or Java shell).
+          MAIN_KT="$PKG_DIR/MainActivity.kt"
+          if [ -f "$MAIN_KT" ]; then
+            cat > "$MAIN_KT" <<'EOF'
+package app.puvio.store
+
+import android.os.Bundle
+import com.getcapacitor.BridgeActivity
+import app.puvio.store.installer.PuvioInstallerPlugin
+
+class MainActivity : BridgeActivity() {
+    override fun onCreate(savedInstanceState: Bundle?) {
+        registerPlugin(PuvioInstallerPlugin::class.java)
+        super.onCreate(savedInstanceState)
+    }
+}
+EOF
+          else
+            MAIN_JAVA="$PKG_DIR/MainActivity.java"
+            cat > "$MAIN_JAVA" <<'EOF'
+package app.puvio.store;
+
+import android.os.Bundle;
+import com.getcapacitor.BridgeActivity;
+import app.puvio.store.installer.PuvioInstallerPlugin;
+
+public class MainActivity extends BridgeActivity {
+    @Override
+    public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(PuvioInstallerPlugin.class);
+        super.onCreate(savedInstanceState);
+    }
+}
+EOF
+          fi
+
+          # PackageInstaller + notification permissions.
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          python3 - "$MANIFEST" <<'PYEOF'
+import sys, re
+path = sys.argv[1]
+xml = open(path, encoding="utf-8").read()
+perms = [
+    'android.permission.INTERNET',
+    'android.permission.REQUEST_INSTALL_PACKAGES',
+    'android.permission.QUERY_ALL_PACKAGES',
+    'android.permission.POST_NOTIFICATIONS',
+]
+if 'xmlns:tools' not in xml:
+    xml = xml.replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ', 1)
+lines = []
+for p in perms:
+    if p in xml:
+        continue
+    extra = ' tools:ignore="QueryAllPackagesPermission"' if p.endswith('QUERY_ALL_PACKAGES') else ''
+    lines.append(f'    <uses-permission android:name="{p}"{extra} />')
+if lines:
+    xml = xml.replace('</manifest>', "\n".join(lines) + "\n</manifest>", 1)
+open(path, 'w', encoding='utf-8').write(xml)
+print("manifest permissions ensured")
+PYEOF
+
       - name: Apply version + orientation + display name
         working-directory: app/android
         run: |
