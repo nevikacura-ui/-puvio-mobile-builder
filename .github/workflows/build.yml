@@ -1,10 +1,9 @@
 name: Mobile Build Dispatcher
-
 on:
   workflow_dispatch:
     inputs:
       job_id:        { description: 'Build job ID',          required: true,  type: string }
-      source_url:    { description: 'Source web app URL',    required: true,  type: string }
+      source_url:    { description: 'Source web URL or Git repository', required: true, type: string }
       package_id:    { description: 'Package ID',            required: true,  type: string }
       display_name:  { description: 'App display name',      required: true,  type: string }
       icon_url:      { description: 'App icon URL',          required: false, type: string }
@@ -14,11 +13,9 @@ on:
       version_name:  { description: 'Version name',          required: true,  type: string }
       version_code:  { description: 'Version code',          required: true,  type: string }
       callback_url:  { description: 'Callback URL',          required: true,  type: string }
-
 concurrency:
   group: build-${{ github.event.inputs.job_id }}
   cancel-in-progress: false
-
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -40,7 +37,6 @@ jobs:
       KEYSTORE_PASS:   ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       KEY_ALIAS:       ${{ secrets.ANDROID_KEY_ALIAS }}
       KEY_PASS:        ${{ secrets.ANDROID_KEY_PASSWORD }}
-
     steps:
       - name: Acknowledge dispatch
         run: |
@@ -49,43 +45,79 @@ jobs:
             -H "x-job-id: $JOB_ID" \
             -H "x-format: status" \
             -d "{\"status\":\"acknowledged\"}" || true
-
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with: { node-version: '20' }
-
       - uses: actions/setup-java@v4
         with: { distribution: 'temurin', java-version: '17' }
-
       - uses: android-actions/setup-android@v3
         with: { cmdline-tools-version: '11076708' }
-
       - name: Install Android SDK packages
         run: |
           yes | sdkmanager --licenses >/dev/null 2>&1 || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0" "platform-tools" >/dev/null
 
-      - name: Scaffold Capacitor project
+      - name: Prepare Android Project (Expo repo vs Web URL)
         run: |
           set -euo pipefail
-          mkdir -p app && cd app
-          npm init -y >/dev/null
-          npm pkg set name="puvio-shell" private=true >/dev/null
-          npm install --no-audit --no-fund \
-            @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 >/dev/null
+          IS_GIT=false
+          if [[ "$SOURCE_URL" =~ \.git$ ]] || [[ "$SOURCE_URL" =~ ^git@ ]] || [[ "$SOURCE_URL" =~ github\.com/ ]]; then
+            IS_GIT=true
+          fi
 
-          mkdir -p www
-          cat > www/index.html <<HTML
+          if [ "$IS_GIT" = "true" ]; then
+            echo "::notice::Detected Git repository: cloning $SOURCE_URL"
+            git clone --depth=1 "$SOURCE_URL" app
+            cd app
+
+            # Check if this is an Expo project
+            IS_EXPO=false
+            if [ -f app.json ] && grep -q '"expo"' app.json; then IS_EXPO=true; fi
+            if [ -f package.json ] && grep -q '"expo"' package.json; then IS_EXPO=true; fi
+
+            if [ "$IS_EXPO" = "true" ]; then
+              echo "::notice::Building Expo project: running npm install & expo prebuild..."
+              npm install --legacy-peer-deps
+              python3 - <<'PY'
+          import json, os, pathlib
+          p = pathlib.Path("app.json")
+          if p.exists():
+              try:
+                  data = json.loads(p.read_text())
+                  expo = data.setdefault("expo", {})
+                  if os.environ.get("DISPLAY_NAME"):
+                      expo["name"] = os.environ["DISPLAY_NAME"]
+                  if os.environ.get("PACKAGE_ID"):
+                      expo.setdefault("android", {})["package"] = os.environ["PACKAGE_ID"]
+                  p.write_text(json.dumps(data, indent=2))
+                  print("Updated app.json with name and package_id")
+              except Exception as e:
+                  print("Notice: could not patch app.json:", e)
+          PY
+              npx --yes expo prebuild --platform android --clean --no-install
+            else
+              echo "::notice::Standard web repo detected. Building web bundle and wrapping with Capacitor..."
+              npm install || true
+              npm run build || true
+              npx --yes @capacitor/cli add android || true
+            fi
+          else
+            echo "::notice::Detected Web URL: wrapping in Capacitor"
+            mkdir -p app && cd app
+            npm init -y >/dev/null
+            npm pkg set name="puvio-shell" private=true >/dev/null
+            npm install --no-audit --no-fund \
+              @capacitor/core@6 @capacitor/cli@6 @capacitor/android@6 >/dev/null
+            mkdir -p www
+            cat > www/index.html <<HTML
           <!doctype html><meta http-equiv="refresh" content="0; url=${SOURCE_URL}">
           <title>${DISPLAY_NAME}</title>
           HTML
-
-          NAV_HOST=$(printf '%s' "$SOURCE_URL" | sed -E 's#^[a-zA-Z]+://##; s#/.*##; s#:.*##' | tr 'A-Z' 'a-z')
-          NAV_BARE=${NAV_HOST#www.}
-          ALLOW_NAV="[\"$NAV_HOST\",\"$NAV_BARE\",\"www.$NAV_BARE\",\"*.$NAV_BARE\"]"
-          SAFE_NAME=$(printf '%s' "$DISPLAY_NAME" | sed 's/"/\\"/g')
-          cat > capacitor.config.json <<JSON
+            NAV_HOST=$(printf '%s' "$SOURCE_URL" | sed -E 's#^[a-zA-Z]+://##; s#/.*##; s#:.*##' | tr 'A-Z' 'a-z')
+            NAV_BARE=${NAV_HOST#www.}
+            ALLOW_NAV="[\"$NAV_HOST\",\"$NAV_BARE\",\"www.$NAV_BARE\",\"*.$NAV_BARE\"]"
+            SAFE_NAME=$(printf '%s' "$DISPLAY_NAME" | sed 's/"/\\"/g')
+            cat > capacitor.config.json <<JSON
           {
             "appId": "${PACKAGE_ID}",
             "appName": "${SAFE_NAME}",
@@ -94,9 +126,9 @@ jobs:
             "android": { "allowMixedContent": false }
           }
           JSON
-
-          npx cap add android
-          npx cap sync android
+            npx cap add android
+            npx cap sync android
+          fi
 
       - name: Inject Puvio native installer
         if: ${{ inputs.package_id == 'app.puvio.store' }}
@@ -106,21 +138,16 @@ jobs:
           PKG_DIR="android/app/src/main/java/$(echo "app.puvio.store" | tr '.' '/')"
           mkdir -p "$PKG_DIR/installer"
           curl -fsSL "https://www.puvio.ai/api/public/android/installer-plugin" -o "$PKG_DIR/installer/PuvioInstallerPlugin.kt"
-
-          # Register the plugin in MainActivity (Kotlin or Java shell).
           if [ -f "$PKG_DIR/MainActivity.kt" ]; then
             echo "cGFja2FnZSBhcHAucHV2aW8uc3RvcmUKCmltcG9ydCBhbmRyb2lkLm9zLkJ1bmRsZQppbXBvcnQgY29tLmdldGNhcGFjaXRvci5CcmlkZ2VBY3Rpdml0eQppbXBvcnQgYXBwLnB1dmlvLnN0b3JlLmluc3RhbGxlci5QdXZpb0luc3RhbGxlclBsdWdpbgoKY2xhc3MgTWFpbkFjdGl2aXR5IDogQnJpZGdlQWN0aXZpdHkoKSB7CiAgICBvdmVycmlkZSBmdW4gb25DcmVhdGUoc2F2ZWRJbnN0YW5jZVN0YXRlOiBCdW5kbGU/KSB7CiAgICAgICAgcmVnaXN0ZXJQbHVnaW4oUHV2aW9JbnN0YWxsZXJQbHVnaW46OmNsYXNzLmphdmEpCiAgICAgICAgc3VwZXIub25DcmVhdGUoc2F2ZWRJbnN0YW5jZVN0YXRlKQogICAgfQp9Cg==" | base64 -d > "$PKG_DIR/MainActivity.kt"
           else
             echo "cGFja2FnZSBhcHAucHV2aW8uc3RvcmU7CgppbXBvcnQgYW5kcm9pZC5vcy5CdW5kbGU7CmltcG9ydCBjb20uZ2V0Y2FwYWNpdG9yLkJyaWRnZUFjdGl2aXR5OwppbXBvcnQgYXBwLnB1dmlvLnN0b3JlLmluc3RhbGxlci5QdXZpb0luc3RhbGxlclBsdWdpbjsKCnB1YmxpYyBjbGFzcyBNYWluQWN0aXZpdHkgZXh0ZW5kcyBCcmlkZ2VBY3Rpdml0eSB7CiAgICBAT3ZlcnJpZGUKICAgIHB1YmxpYyB2b2lkIG9uQ3JlYXRlKEJ1bmRsZSBzYXZlZEluc3RhbmNlU3RhdGUpIHsKICAgICAgICByZWdpc3RlclBsdWdpbihQdXZpb0luc3RhbGxlclBsdWdpbi5jbGFzcyk7CiAgICAgICAgc3VwZXIub25DcmVhdGUoc2F2ZWRJbnN0YW5jZVN0YXRlKTsKICAgIH0KfQo=" | base64 -d > "$PKG_DIR/MainActivity.java"
           fi
-
-          # Enable Kotlin compilation in the app module (Java-only template).
           echo "aW1wb3J0IHBhdGhsaWIsIHJlCgojIDEpIFJvb3QgYnVpbGQuZ3JhZGxlOiBtYWtlIHRoZSBrb3RsaW4tZ3JhZGxlLXBsdWdpbiBjbGFzc3BhdGggYXZhaWxhYmxlIHNvCiMgICAgJ2tvdGxpbi1hbmRyb2lkJyByZXNvbHZlcyBpbiB0aGUgYXBwIG1vZHVsZS4Kcm9vdCA9IHBhdGhsaWIuUGF0aCgiYW5kcm9pZC9idWlsZC5ncmFkbGUiKQpzcmMgPSByb290LnJlYWRfdGV4dCgpCmlmICJrb3RsaW4tZ3JhZGxlLXBsdWdpbiIgbm90IGluIHNyYzoKICAgIG0gPSByZS5zZWFyY2gociIoY2xhc3NwYXRoXHMrWydcIl1jb21cLmFuZHJvaWRcLnRvb2xzXC5idWlsZDpncmFkbGU6W14nXCJdK1snXCJdKSIsIHNyYykKICAgIGlmIG06CiAgICAgICAgc3JjID0gc3JjWzogbS5lbmQoKV0gKyAiXG4gICAgICAgIGNsYXNzcGF0aCAnb3JnLmpldGJyYWlucy5rb3RsaW46a290bGluLWdyYWRsZS1wbHVnaW46MS45LjI0JyIgKyBzcmNbbS5lbmQoKSA6XQogICAgICAgIHJvb3Qud3JpdGVfdGV4dChzcmMpCiAgICAgICAgcHJpbnQoInJvb3QgYnVpbGQuZ3JhZGxlOiBrb3RsaW4gY2xhc3NwYXRoIGFkZGVkIikKICAgIGVsc2U6CiAgICAgICAgcHJpbnQoInJvb3QgYnVpbGQuZ3JhZGxlOiBhbmRyb2lkIGdyYWRsZSBjbGFzc3BhdGggbm90IGZvdW5kIiwgZmx1c2g9VHJ1ZSkKICAgICAgICByYWlzZSBTeXN0ZW1FeGl0KDEpCmVsc2U6CiAgICBwcmludCgicm9vdCBidWlsZC5ncmFkbGU6IGtvdGxpbiBjbGFzc3BhdGggYWxyZWFkeSBwcmVzZW50IikKCiMgMikgQXBwIG1vZHVsZTogYXBwbHkga290bGluLWFuZHJvaWQgKyBzdGRsaWIgZGVwZW5kZW5jeS4KcCA9IHBhdGhsaWIuUGF0aCgiYW5kcm9pZC9hcHAvYnVpbGQuZ3JhZGxlIikKc3JjID0gcC5yZWFkX3RleHQoKQpjaGFuZ2VkID0gRmFsc2UKaWYgImtvdGxpbi1hbmRyb2lkIiBub3QgaW4gc3JjOgogICAgc3JjID0gc3JjLnJlcGxhY2UoCiAgICAgICAgImFwcGx5IHBsdWdpbjogJ2NvbS5hbmRyb2lkLmFwcGxpY2F0aW9uJyIsCiAgICAgICAgImFwcGx5IHBsdWdpbjogJ2NvbS5hbmRyb2lkLmFwcGxpY2F0aW9uJ1xuYXBwbHkgcGx1Z2luOiAna290bGluLWFuZHJvaWQnIiwKICAgICAgICAxLAogICAgKQogICAgY2hhbmdlZCA9IFRydWUKaWYgImtvdGxpbi1zdGRsaWIiIG5vdCBpbiBzcmM6CiAgICBtID0gcmUuc2VhcmNoKHIiZGVwZW5kZW5jaWVzXHMqXHsiLCBzcmMpCiAgICBpZiBtOgogICAgICAgIHNyYyA9IHNyY1s6IG0uZW5kKCldICsgIlxuICAgIGltcGxlbWVudGF0aW9uIFwib3JnLmpldGJyYWlucy5rb3RsaW46a290bGluLXN0ZGxpYjoxLjkuMjRcIiIgKyBzcmNbbS5lbmQoKSA6XQogICAgICAgIGNoYW5nZWQgPSBUcnVlCmlmIGNoYW5nZWQ6CiAgICBwLndyaXRlX3RleHQoc3JjKQpwcmludCgiYXBwIGJ1aWxkLmdyYWRsZSBrb3RsaW4gcGF0Y2g6IiwgImFwcGxpZWQiIGlmIGNoYW5nZWQgZWxzZSAiYWxyZWFkeSBwcmVzZW50IikK" | base64 -d > /tmp/puvio_gradle.py
           python3 /tmp/puvio_gradle.py
-
-          # PackageInstaller + notification permissions.
           echo "aW1wb3J0IHN5cwpwYXRoID0gc3lzLmFyZ3ZbMV0KeG1sID0gb3BlbihwYXRoLCBlbmNvZGluZz0idXRmLTgiKS5yZWFkKCkKcGVybXMgPSBbCiAgICAiYW5kcm9pZC5wZXJtaXNzaW9uLklOVEVSTkVUIiwKICAgICJhbmRyb2lkLnBlcm1pc3Npb24uUkVRVUVTVF9JTlNUQUxMX1BBQ0tBR0VTIiwKICAgICJhbmRyb2lkLnBlcm1pc3Npb24uUVVFUllfQUxMX1BBQ0tBR0VTIiwKICAgICJhbmRyb2lkLnBlcm1pc3Npb24uUE9TVF9OT1RJRklDQVRJT05TIiwKXQppZiAieG1sbnM6dG9vbHMiIG5vdCBpbiB4bWw6CiAgICB4bWwgPSB4bWwucmVwbGFjZSgiPG1hbmlmZXN0ICIsICc8bWFuaWZlc3QgeG1sbnM6dG9vbHM9Imh0dHA6Ly9zY2hlbWFzLmFuZHJvaWQuY29tL3Rvb2xzIiAnLCAxKQpsaW5lcyA9IFtdCmZvciBwIGluIHBlcm1zOgogICAgaWYgcCBpbiB4bWw6CiAgICAgICAgY29udGludWUKICAgIGV4dHJhID0gJyB0b29sczppZ25vcmU9IlF1ZXJ5QWxsUGFja2FnZXNQZXJtaXNzaW9uIicgaWYgcC5lbmRzd2l0aCgiUVVFUllfQUxMX1BBQ0tBR0VTIikgZWxzZSAiIgogICAgbGluZXMuYXBwZW5kKCcgICAgPHVzZXMtcGVybWlzc2lvbiBhbmRyb2lkOm5hbWU9IiVzIiVzIC8+JyAlIChwLCBleHRyYSkpCmlmIGxpbmVzOgogICAgeG1sID0geG1sLnJlcGxhY2UoIjwvbWFuaWZlc3Q+IiwgIlxuIi5qb2luKGxpbmVzKSArICJcbjwvbWFuaWZlc3Q+IiwgMSkKb3BlbihwYXRoLCAidyIsIGVuY29kaW5nPSJ1dGYtOCIpLndyaXRlKHhtbCkKcHJpbnQoIm1hbmlmZXN0IHBlcm1pc3Npb25zIGVuc3VyZWQiKQo=" | base64 -d > /tmp/puvio_manifest.py
           python3 /tmp/puvio_manifest.py "android/app/src/main/AndroidManifest.xml"
+
       - name: Apply version + orientation + display name
         working-directory: app/android
         run: |
@@ -129,7 +156,8 @@ jobs:
           sed -i "s/versionCode .*/versionCode ${VERSION_CODE}/" $BG
           sed -i "s/versionName .*/versionName \"${VERSION_NAME}\"/" $BG
           STR=app/src/main/res/values/strings.xml
-          python3 - <<PY
+          if [ -f "$STR" ]; then
+            python3 - <<PY
           import re, os
           p="$STR"; n=os.environ["DISPLAY_NAME"]
           s=open(p).read()
@@ -137,6 +165,7 @@ jobs:
           s=re.sub(r'(<string name="title_activity_main">)[^<]*(</string>)', r'\g<1>'+n.replace('&','&amp;')+r'\g<2>', s)
           open(p,'w').write(s)
           PY
+          fi
           if [ "${ORIENTATION:-}" = "portrait" ] || [ "${ORIENTATION:-}" = "landscape" ]; then
             MAN=app/src/main/AndroidManifest.xml
             sed -i "s/android:screenOrientation=\"[a-zA-Z]*\"/android:screenOrientation=\"${ORIENTATION}\"/" $MAN || true
@@ -214,6 +243,7 @@ jobs:
             fi
           fi
           echo "✓ Signing credentials verified (store + alias '$KEY_ALIAS' + key password OK)"
+
       - name: Load verified signing bundle
         run: |
           set -euo pipefail
@@ -254,7 +284,6 @@ jobs:
         working-directory: app/android
         run: |
           cat >> app/build.gradle <<'GRADLE'
-
           android {
               signingConfigs {
                   release {
