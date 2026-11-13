@@ -243,7 +243,6 @@ jobs:
             fi
           fi
           echo "✓ Signing credentials verified (store + alias '$KEY_ALIAS' + key password OK)"
-
       - name: Load verified signing bundle
         run: |
           set -euo pipefail
